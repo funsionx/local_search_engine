@@ -1,21 +1,19 @@
 pub mod lexer;
+pub mod server;
 use crate::lexer::Lexer;
+use crate::server::serve_request;
 use std::collections::HashMap;
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{exit, ExitCode};
 use std::{env, io};
-use tiny_http::StatusCode;
-use tiny_http::{Header, Method, Request, Response, Server};
+
+use tiny_http::{Server};
 use xml::reader::XmlEvent;
 use xml::EventReader;
 
-fn tf(term: &str, doc: &TermFreq) -> f32 {
-    let sum: usize = doc.iter().map(|(_, freq)| *freq).sum();
-    let term = *doc.get(term).unwrap_or(&0) as f32;
-    term / sum as f32
-}
+
 
 fn read_entire_xml(file_path: &Path) -> Result<String, std::io::Error> {
     let file = File::open(file_path).unwrap();
@@ -78,63 +76,6 @@ fn index_folder(dir_path: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn serve_static_file(
-    request: Request,
-    file_path: &str,
-    content_type: &str,
-) -> Result<(), std::io::Error> {
-    let content_type_header = Header::from_bytes("Content-Type", content_type).expect("Didnt");
-
-    let file = match File::open(file_path) {
-        Ok(file) => file,
-        Err(error) => {
-            eprintln!("ERROR: \n can't serve {file_path}: {error}");
-            if error.kind() == io::ErrorKind::NotFound {
-                return request
-                    .respond(Response::from_string("404").with_status_code(StatusCode(404)));
-            }
-            return request.respond(Response::from_string("500").with_status_code(StatusCode(500)));
-        }
-    };
-
-    request.respond(Response::from_file(file).with_header(content_type_header))
-}
-
-fn serve_request(mut request: Request, tf_index: &TermFreqInd) -> Result<(), ()> {
-    match (request.method(), request.url()) {
-        (Method::Post, "/api/search") => {
-            let mut buffer = Vec::new();
-            request
-                .as_reader()
-                .read_to_end(&mut buffer)
-                .expect("cant fail");
-            let body = std::str::from_utf8(&buffer)
-                .map_err(|err| eprintln!("{err} occured"))?
-                .chars()
-                .collect::<Vec<_>>();
-            tf_index.into_iter().for_each(|(path, termfreq)| {
-                println!("{path}", path = path.display());
-                Lexer::new(&body).into_iter().for_each(|word| {
-                    println!("{word} => {tf}", tf = tf(&word, termfreq));
-                })
-            })
-        }
-
-        (Method::Get, "/") | (Method::Get, "/index.html") => {
-            serve_static_file(request, "index.html", "text/html; charset=utf-8")
-                .expect("Error while serving static")
-        }
-        (Method::Get, "/index.ts") => {
-            serve_static_file(request, "index.ts", "text/x.typescript; charset=utf-8")
-                .expect("Error while serving typescript")
-        }
-        _ => request
-            .respond(Response::from_string("404").with_status_code(StatusCode(404)))
-            .map_err(|err| eprintln!("found {err}"))?,
-    }
-
-    Ok(())
-}
 
 fn entry() -> Result<(), ()> {
     let mut args = env::args();
